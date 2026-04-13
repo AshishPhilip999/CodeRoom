@@ -25,7 +25,7 @@ public class EditorController {
             Files.writeString(filePath, content);
 
             // 2. Run shell script
-            ProcessBuilder builder = new ProcessBuilder("./run.sh");
+            ProcessBuilder builder = new ProcessBuilder("cmd.exe", "/c", "C:\\CodeRoom\\CodeRoom-Server\\run.bat");
             builder.redirectErrorStream(true);
 
             System.out.println("1 . Running shell script...");
