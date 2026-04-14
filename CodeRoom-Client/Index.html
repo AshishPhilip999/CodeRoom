@@ -37,6 +37,9 @@
     <pre id="output"></pre>
 
     <script>
+      let serverHost = "localhost";
+      let port = "8080";
+
       // Initialize CodeMirror editor
       const editor = CodeMirror(document.getElementById("editor"), {
         mode: "text/x-java",
@@ -57,13 +60,16 @@
         const content = editor.getValue();
 
         try {
-          const response = await fetch("http://localhost:8080/api/compile", {
-            method: "POST",
-            headers: {
-              "Content-Type": "text/plain",
+          const response = await fetch(
+            `http://${serverHost}:${port}/api/compile`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "text/plain",
+              },
+              body: content,
             },
-            body: content,
-          });
+          );
 
           const result = await response.text();
           document.getElementById("output").innerText = result;
@@ -72,26 +78,64 @@
         }
       }
 
-      const socket = new WebSocket("ws://localhost:8080/ws");
+      const socket = new WebSocket(`ws://${serverHost}:${port}/ws`);
       let isRemoteUpdate = false;
 
       // Receive updates
       socket.onmessage = (event) => {
-        const incoming = event.data;
-
-        // update editor (be careful: this replaces content)
         isRemoteUpdate = true;
-        editor.setValue(incoming);
+        const data = JSON.parse(event.data);
+        applyChange(data);
         isRemoteUpdate = false;
       };
 
+      function applyChange(change) {
+        const doc = editor.getDoc();
+
+        if (change.type === "insert") {
+          const pos = doc.posFromIndex(change.index);
+          doc.replaceRange(change.value, pos);
+        }
+
+        if (change.type === "delete") {
+          const from = doc.posFromIndex(change.index);
+          const to = doc.posFromIndex(change.index + change.length);
+          doc.replaceRange("", from, to);
+        }
+      }
+
       // Send changes
-      editor.on("change", () => {
+      editor.on("change", (instance, changeObj) => {
         if (isRemoteUpdate) {
           return;
         }
-        const content = editor.getValue();
-        socket.send(content);
+        const from = changeObj.from; // {line, ch}
+        const to = changeObj.to;
+        const text = changeObj.text.join("\n"); // inserted text
+        const removed = changeObj.removed.join("\n");
+
+        // Convert position → index
+        const index = instance.indexFromPos(from);
+
+        let payload;
+
+        if (text && text.length > 0) {
+          // INSERT
+          payload = {
+            type: "insert",
+            index: index,
+            value: text,
+          };
+        } else {
+          // DELETE
+          payload = {
+            type: "delete",
+            index: index,
+            length: removed.length,
+          };
+        }
+
+        socket.send(JSON.stringify(payload));
       });
     </script>
   </body>
