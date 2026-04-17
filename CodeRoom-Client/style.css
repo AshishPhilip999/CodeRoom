@@ -100,3 +100,9 @@ button:hover {
     font-family: monospace;
 }
 
+.controls input {
+    padding: 8px;
+    border-radius: 6px;
+    border: none;
+    margin-right: 8px;
+}

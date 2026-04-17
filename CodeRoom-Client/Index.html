@@ -5,10 +5,8 @@
     <meta charset="UTF-8" />
     <title>Code Room</title>
 
-    <!-- Your CSS -->
     <link rel="stylesheet" href="Style.css" />
 
-    <!-- CodeMirror CSS -->
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"
@@ -18,13 +16,33 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css"
     />
 
-    <!-- CodeMirror JS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
   </head>
 
   <body>
     <div class="header">Code Room</div>
+
+    <!-- ROOM CONTROLS -->
+    <div class="controls">
+      <!-- NOT IN ROOM -->
+      <div id="roomActions">
+        <button onclick="createRoom()">Create Room</button>
+
+        <input id="roomInput" placeholder="Enter Room ID" />
+        <button onclick="joinRoom()">Join Room</button>
+      </div>
+
+      <!-- IN ROOM -->
+      <div id="inRoomActions" style="display: none">
+        <button onclick="leaveRoom()">Leave Room</button>
+      </div>
+
+      <!-- STATUS -->
+      <span id="status" style="margin-left: 10px; color: #22c55e">
+        Not in any room
+      </span>
+    </div>
 
     <div class="editor-container">
       <div id="editor"></div>
@@ -40,7 +58,9 @@
       let serverHost = "localhost";
       let port = "8080";
 
-      // Initialize CodeMirror editor
+      let joined = false;
+      let currentRoom = null;
+
       const editor = CodeMirror(document.getElementById("editor"), {
         mode: "text/x-java",
         theme: "dracula",
@@ -55,7 +75,105 @@
       }
 }`,
       });
-      // Compile button function
+
+      // ===============================
+      // UI TOGGLE
+      // ===============================
+      function updateUI() {
+        document.getElementById("roomActions").style.display = joined
+          ? "none"
+          : "block";
+        document.getElementById("inRoomActions").style.display = joined
+          ? "block"
+          : "none";
+
+        document.getElementById("status").innerText = joined
+          ? "In Room: " + currentRoom
+          : "Not in any room";
+      }
+
+      // ===============================
+      // ROOM FUNCTIONS
+      // ===============================
+      function createRoom() {
+        const roomId = generateUUID();
+
+        socket.send(
+          JSON.stringify({
+            type: "create",
+            roomID: roomId,
+          }),
+        );
+
+        // if success only then update UI
+
+        joined = true;
+        currentRoom = roomId;
+
+        updateUI();
+      }
+
+      function generateUUID() {
+        if (crypto && crypto.randomUUID) {
+          return crypto.randomUUID();
+        }
+
+        // Fallback (works everywhere)
+        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+          /[xy]/g,
+          function (c) {
+            const r = (Math.random() * 16) | 0;
+            const v = c === "x" ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          },
+        );
+      }
+
+      function joinRoom() {
+        const roomId = document.getElementById("roomInput").value;
+
+        if (!roomId) {
+          alert("Enter Room ID");
+          return;
+        }
+
+        socket.send(
+          JSON.stringify({
+            type: "join",
+            roomID: roomId,
+          }),
+        );
+
+        // If success only then update UI
+
+        joined = true;
+        currentRoom = roomId;
+
+        updateUI();
+      }
+
+      function leaveRoom() {
+        if (!joined) return;
+
+        // Optional: notify backend
+        socket.send(
+          JSON.stringify({
+            type: "leave",
+            roomID: currentRoom,
+          }),
+        );
+
+        joined = false;
+        currentRoom = null;
+
+        updateUI();
+
+        console.log("Left room");
+      }
+
+      // ===============================
+      // COMPILE
+      // ===============================
       async function compileCode() {
         const content = editor.getValue();
 
@@ -78,13 +196,20 @@
         }
       }
 
+      // ===============================
+      // SOCKET
+      // ===============================
       const socket = new WebSocket(`ws://${serverHost}:${port}/ws`);
       let isRemoteUpdate = false;
 
-      // Receive updates
+      socket.onopen = () => {
+        console.log("Connected to server");
+      };
+
       socket.onmessage = (event) => {
-        isRemoteUpdate = true;
         const data = JSON.parse(event.data);
+
+        isRemoteUpdate = true;
         applyChange(data);
         isRemoteUpdate = false;
       };
@@ -92,44 +217,45 @@
       function applyChange(change) {
         const doc = editor.getDoc();
 
-        if (change.type === "insert") {
+        if (change.opType === "insert") {
           const pos = doc.posFromIndex(change.index);
           doc.replaceRange(change.value, pos);
         }
 
-        if (change.type === "delete") {
+        if (change.opType === "delete") {
           const from = doc.posFromIndex(change.index);
           const to = doc.posFromIndex(change.index + change.length);
           doc.replaceRange("", from, to);
         }
       }
 
-      // Send changes
+      // ===============================
+      // SEND CHANGES
+      // ===============================
       editor.on("change", (instance, changeObj) => {
-        if (isRemoteUpdate) {
-          return;
-        }
-        const from = changeObj.from; // {line, ch}
-        const to = changeObj.to;
-        const text = changeObj.text.join("\n"); // inserted text
+        if (isRemoteUpdate || !joined) return;
+
+        const from = changeObj.from;
+        const text = changeObj.text.join("\n");
         const removed = changeObj.removed.join("\n");
 
-        // Convert position → index
         const index = instance.indexFromPos(from);
 
         let payload;
 
         if (text && text.length > 0) {
-          // INSERT
           payload = {
-            type: "insert",
+            type: "editor",
+            opType: "insert",
+            roomID: currentRoom,
             index: index,
             value: text,
           };
         } else {
-          // DELETE
           payload = {
-            type: "delete",
+            type: "editor",
+            opType: "delete",
+            roomID: currentRoom,
             index: index,
             length: removed.length,
           };
@@ -137,6 +263,10 @@
 
         socket.send(JSON.stringify(payload));
       });
+
+      // Initialize UI
+      updateUI();
     </script>
+    ```
   </body>
 </html>
